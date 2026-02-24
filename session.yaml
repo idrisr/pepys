@@ -1,0 +1,17 @@
+session_name: pepys
+windows:
+- layout: main-vertical
+  options:
+    main-pane-width: 80
+  panes:
+  - shell_command:
+    - cd /home/hippoid/fun/pepys
+  window_name: haskell
+- layout: tiled
+  shell_command_before:
+  - cd /home/hippoid/fun/pepys && git status
+  window_name: latex
+- layout: tiled
+  shell_command_before:
+  - cd /home/hippoid/fun/pepys && git status
+  window_name: agent
