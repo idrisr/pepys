@@ -6,3 +6,4 @@ build
 indent.log
 *.devenv.flake.nix
 result
+/.ipython/profile_default

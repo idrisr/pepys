@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The Shorter Pepys — Diary Viewer</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1116;
+      --fg: #e6e7eb;
+      --muted: #9aa0aa;
+      --accent: #6aa0ff;
+      --border: #1c2230;
+      --font: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--fg);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      height: 100vh;
+    }
+    header {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    select, input, button {
+      background: #1a1f2b;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 14px;
+    }
+    button {
+      cursor: pointer;
+    }
+    main {
+      overflow: auto;
+      padding: 16px;
+    }
+    article {
+      max-width: 720px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      font-size: 16px;
+    }
+    h1 {
+      margin: 0 0 12px 0;
+      font-size: 22px;
+      color: var(--accent);
+    }
+    .muted { color: var(--muted); font-size: 13px; }
+    .spacer { flex: 1; }
+    @media (max-width: 640px) {
+      header { flex-wrap: wrap; }
+      main { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <button id="prev">⟨ Prev</button>
+    <button id="next">Next ⟩</button>
+    <select id="picker" aria-label="Pick a date"></select>
+    <input id="search" type="search" placeholder="Search text… (Enter to jump)" size="24" />
+    <select id="summaryMode" aria-label="Summary length">
+      <option value="full">Full text</option>
+      <option value="w10">10-word LLM</option>
+      <option value="w100">100-word LLM</option>
+      <option value="half">Half-length LLM</option>
+    </select>
+    <span class="muted">Shortcuts: ←/→ nav, / search, Enter search, Esc clear</span>
+    <div class="spacer"></div>
+  </header>
+  <main>
+    <article>
+      <h1 id="title">Loading…</h1>
+      <div class="muted" id="meta"></div>
+      <div id="body" class="muted">Please wait.</div>
+    </article>
+  </main>
+  <script>
+    const picker = document.getElementById('picker');
+    const prevBtn = document.getElementById('prev');
+    const nextBtn = document.getElementById('next');
+    const title = document.getElementById('title');
+    const body = document.getElementById('body');
+    const search = document.getElementById('search');
+    const summaryMode = document.getElementById('summaryMode');
+    const meta = document.getElementById('meta');
+
+    let entries = [];
+    let idx = 0;
+    const summaryCache = new Map(); // key: `${date}|${mode}` -> summary text
+
+    const localSummarize = (text, mode) => {
+      if (mode === 'full') return text;
+      const words = text.split(/\s+/).filter(Boolean);
+      if (!words.length) return '';
+      let limit;
+      if (mode === 'w10') limit = 10;
+      else if (mode === 'w100') limit = 100;
+      else if (mode === 'half') limit = Math.ceil(words.length / 2);
+      else limit = words.length;
+      const truncated = words.slice(0, limit);
+      const joined = truncated.join(' ');
+      return limit < words.length ? joined + ' …' : joined;
+    };
+
+    const SUMMARY_URL = '/summarize';
+
+    const fetchLLMSummary = async (entry, mode) => {
+      const key = `${entry.date}|${mode}`;
+      if (summaryCache.has(key)) return summaryCache.get(key);
+      const res = await fetch(SUMMARY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: entry.text, mode }),
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => res.statusText);
+        throw new Error(msg);
+      }
+      const data = await res.json();
+      const summary = data.summary || '';
+      summaryCache.set(key, summary);
+      return summary;
+    };
+
+    const render = async () => {
+      if (!entries.length) return;
+      idx = Math.max(0, Math.min(idx, entries.length - 1));
+      const entry = entries[idx];
+      const mode = summaryMode.value;
+      const words = entry.text.split(/\s+/).filter(Boolean).length;
+      let label = 'Full text';
+      if (mode === 'w10') label = '10-word LLM';
+      else if (mode === 'w100') label = '100-word LLM';
+      else if (mode === 'half') label = 'Half-length LLM';
+      meta.textContent = `${label} • ${words} words total`;
+      title.textContent = entry.date;
+      picker.value = entry.date;
+      prevBtn.disabled = idx === 0;
+      nextBtn.disabled = idx === entries.length - 1;
+
+      if (mode === 'full') {
+        body.textContent = entry.text;
+        return;
+      }
+
+      // show placeholder while fetching
+      body.textContent = 'Summarizing…';
+      try {
+        const summary = await fetchLLMSummary(entry, mode);
+        body.textContent = summary || '(empty summary)';
+      } catch (err) {
+        console.warn('LLM summary failed, falling back to local truncate:', err);
+        body.textContent = localSummarize(entry.text, mode) + '\n\n[LLM unavailable; showing local truncation]';
+      }
+    };
+
+    const load = async () => {
+      const res = await fetch('diaries.json');
+      entries = await res.json();
+      // Populate select
+      for (const e of entries) {
+        const opt = document.createElement('option');
+        opt.value = e.date;
+        opt.textContent = e.date;
+        picker.appendChild(opt);
+      }
+      render();
+    };
+
+    picker.addEventListener('change', () => {
+      const val = picker.value;
+      const found = entries.findIndex(e => e.date === val);
+      if (found >= 0) { idx = found; render(); }
+    });
+
+    summaryMode.addEventListener('change', render);
+
+    prevBtn.addEventListener('click', () => { idx = Math.max(0, idx - 1); render(); });
+    nextBtn.addEventListener('click', () => { idx = Math.min(entries.length - 1, idx + 1); render(); });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft') { e.preventDefault(); prevBtn.click(); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); nextBtn.click(); }
+      if (e.key === '/' && document.activeElement !== search) { e.preventDefault(); search.focus(); search.select(); }
+      if (e.key === 'Escape' && document.activeElement === search) { search.value = ''; }
+    });
+
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const q = search.value.trim().toLowerCase();
+        if (!q) return;
+        const start = idx;
+        let i = (idx + 1) % entries.length;
+        while (i !== start) {
+          if (entries[i].text.toLowerCase().includes(q)) { idx = i; render(); return; }
+          i = (i + 1) % entries.length;
+        }
+        alert('No further match found.');
+      }
+    });
+
+    load().catch(err => {
+      title.textContent = 'Error loading diaries.json';
+      body.textContent = err;
+    });
+  </script>
+</body>
+</html>
