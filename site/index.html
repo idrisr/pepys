@@ -49,11 +49,45 @@
       overflow: auto;
       padding: 16px;
     }
+    .layout {
+      display: flex;
+      gap: 24px;
+      align-items: flex-start;
+    }
     article {
-      max-width: 720px;
+      flex: 1;
+      max-width: 760px;
       line-height: 1.55;
       white-space: pre-wrap;
       font-size: 16px;
+    }
+    aside {
+      width: 240px;
+      position: sticky;
+      top: 70px;
+      align-self: flex-start;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      box-sizing: border-box;
+    }
+    aside h2 {
+      margin: 0 0 8px 0;
+      font-size: 15px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    #entities {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+    #entities li {
+      margin-bottom: 6px;
     }
     h1 {
       margin: 0 0 12px 0;
@@ -84,11 +118,19 @@
     <div class="spacer"></div>
   </header>
   <main>
-    <article>
-      <h1 id="title">Loading…</h1>
-      <div class="muted" id="meta"></div>
-      <div id="body" class="muted">Please wait.</div>
-    </article>
+    <div class="layout">
+      <article>
+        <h1 id="title">Loading…</h1>
+        <div class="muted" id="meta"></div>
+        <div id="body" class="muted">Please wait.</div>
+      </article>
+      <aside>
+        <h2>Entities</h2>
+        <ul id="entities">
+          <li class="muted">—</li>
+        </ul>
+      </aside>
+    </div>
   </main>
   <script>
     const picker = document.getElementById('picker');
@@ -99,10 +141,47 @@
     const search = document.getElementById('search');
     const summaryMode = document.getElementById('summaryMode');
     const meta = document.getElementById('meta');
+    const entitiesList = document.getElementById('entities');
 
     let entries = [];
     let idx = 0;
     const summaryCache = new Map(); // key: `${date}|${mode}` -> summary text
+
+    const extractEntities = (text) => {
+      const stop = new Set(['The','A','An','And','But','For','In','On','At','Of','To','From','With','His','Her','He','She','They','We','It','My','Our','Their','This','That','These','Those','Sir']);
+      const matches = text.match(/(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/g) || [];
+      const counts = new Map();
+      for (const m of matches) {
+        const trimmed = m.trim();
+        const parts = trimmed.split(/\s+/);
+        if (!parts.length) continue;
+        if (parts.some(p => stop.has(p) || p.length < 3)) continue;
+        if (/^\d/.test(trimmed)) continue;
+        const key = trimmed;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      return Array.from(counts.entries())
+        .sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 10)
+        .map(([name,count]) => ({ name, count }));
+    };
+
+    const renderEntities = (entry) => {
+      const ents = extractEntities(entry.text);
+      entitiesList.innerHTML = '';
+      if (!ents.length) {
+        const li = document.createElement('li');
+        li.className = 'muted';
+        li.textContent = 'No entities detected';
+        entitiesList.appendChild(li);
+        return;
+      }
+      for (const e of ents) {
+        const li = document.createElement('li');
+        li.textContent = `${e.name} (${e.count})`;
+        entitiesList.appendChild(li);
+      }
+    };
 
     const localSummarize = (text, mode) => {
       if (mode === 'full') return text;
@@ -153,6 +232,7 @@
       picker.value = entry.date;
       prevBtn.disabled = idx === 0;
       nextBtn.disabled = idx === entries.length - 1;
+      renderEntities(entry);
 
       if (mode === 'full') {
         body.textContent = entry.text;
