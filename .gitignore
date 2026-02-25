@@ -7,3 +7,9 @@ indent.log
 *.devenv.flake.nix
 result
 /.ipython/profile_default
+pdfvisualizer/web/node_modules
+pdfvisualizer/web/dist
+pdfvisualizer/web/.env
+pdfvisualizer/web/.env.local
+pdfvisualizer/api/.data
+/pdfvisualizer/.ipython/profile_default
