@@ -5,7 +5,6 @@ import sqlite3
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
-from typing import Tuple
 from flask import Flask, request, jsonify, send_from_directory
 import requests
 
@@ -30,11 +29,17 @@ def word_count(text: str) -> int:
     return len([w for w in text.split() if w])
 
 
-NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
+TERM_BOUNDARY_PREFIX = r"(?<![A-Za-z0-9])"
+TERM_BOUNDARY_SUFFIX = r"(?![A-Za-z0-9])"
 
 
-def normalize(text: str) -> str:
-    return NORMALIZE_RE.sub(" ", text.lower()).strip()
+def build_term_pattern(term: str) -> re.Pattern:
+    escaped = re.escape(term.strip())
+    escaped = escaped.replace(r"\ ", r"\s+")
+    return re.compile(
+        rf"{TERM_BOUNDARY_PREFIX}{escaped}{TERM_BOUNDARY_SUFFIX}",
+        re.IGNORECASE,
+    )
 
 
 @lru_cache(maxsize=2)
@@ -45,10 +50,10 @@ def load_people_terms(db_path: str):
     try:
         rows = conn.execute(
             """
-            SELECT p.id, p.name, p.normalized_name AS term
+            SELECT p.id, p.name, p.note, p.name AS term
             FROM people p
             UNION ALL
-            SELECT p.id, p.name, a.normalized_alias AS term
+            SELECT p.id, p.name, p.note, a.alias AS term
             FROM person_aliases a
             JOIN people p ON p.id = a.person_id
             """
@@ -56,44 +61,104 @@ def load_people_terms(db_path: str):
     finally:
         conn.close()
 
-    terms_by_person = {}
-    for person_id, person_name, term in rows:
+    terms = []
+    seen = set()
+    for person_id, person_name, person_note, term in rows:
         if not term:
             continue
-        entry = terms_by_person.setdefault(
-            person_id,
-            {"name": person_name, "terms": set()},
+        cleaned = term.strip()
+        if not cleaned:
+            continue
+        key = (person_id, cleaned.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        terms.append(
+            {
+                "person_id": int(person_id),
+                "name": person_name,
+                "note": person_note,
+                "term": cleaned,
+                "pattern": build_term_pattern(cleaned),
+            }
         )
-        entry["terms"].add(term)
-
-    terms = []
-    for person_id, entry in terms_by_person.items():
-        for term in entry["terms"]:
-            pattern = re.compile(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])")
-            terms.append((person_id, entry["name"], pattern))
     return terms
 
 
 def entities_for_text(text: str, limit: int = 10):
-    normalized = normalize(text)
-    if not normalized:
-        return []
+    if not text.strip():
+        return {"entities": [], "matches": []}
 
     terms = load_people_terms(PEOPLE_DB_PATH)
-    counts = defaultdict(int)
-    names = {}
-    for person_id, person_name, pattern in terms:
-        match_count = len(pattern.findall(normalized))
-        if match_count:
-            counts[person_id] += match_count
-            names[person_id] = person_name
+    raw_matches = []
+    for term in terms:
+        for match in term["pattern"].finditer(text):
+            raw_matches.append(
+                {
+                    "start": match.start(),
+                    "end": match.end(),
+                    "person_id": term["person_id"],
+                    "name": term["name"],
+                    "note": term["note"],
+                }
+            )
 
-    entities = [
-        {"name": names[person_id], "count": count}
-        for person_id, count in counts.items()
-    ]
+    if not raw_matches:
+        return {"entities": [], "matches": []}
+
+    raw_matches.sort(key=lambda m: (m["start"], -(m["end"] - m["start"])))
+    matches = []
+    cursor = -1
+    for match in raw_matches:
+        if match["start"] < cursor:
+            continue
+        matches.append(match)
+        cursor = match["end"]
+
+    counts = defaultdict(int)
+    people = {}
+    for match in matches:
+        person_id = match["person_id"]
+        counts[person_id] += 1
+        people.setdefault(
+            person_id,
+            {"id": person_id, "name": match["name"], "note": match["note"]},
+        )
+
+    name_entities = {}
+    for person_id, count in counts.items():
+        person = people.get(person_id)
+        if not person:
+            continue
+        name = (person.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        existing = name_entities.get(key)
+        if not existing:
+            name_entities[key] = {
+                "id": person_id,
+                "name": name,
+                "note": person.get("note"),
+                "count": count,
+                "_note_score": count,
+            }
+            continue
+        existing["count"] += count
+        if person.get("note") and (
+            not existing.get("note") or count > existing.get("_note_score", 0)
+        ):
+            existing["note"] = person.get("note")
+            existing["_note_score"] = count
+
+    entities = list(name_entities.values())
+    for entity in entities:
+        entity.pop("_note_score", None)
     entities.sort(key=lambda x: (-x["count"], x["name"]))
-    return entities[:limit]
+    if limit:
+        entities = entities[:limit]
+
+    return {"entities": entities, "matches": matches}
 
 
 def limit_for_mode(mode: str, text: str) -> int:
@@ -184,14 +249,16 @@ def entities():
     lines = text.splitlines()
     if lines and lines[0].strip() == date:
         lines = lines[1:]
+    while lines and not lines[0].strip():
+        lines = lines[1:]
     body = "\n".join(lines)
 
     try:
-        people = entities_for_text(body, limit=limit)
+        data = entities_for_text(body, limit=limit)
     except FileNotFoundError as exc:
         return jsonify({"error": str(exc)}), 500
 
-    return jsonify({"entities": people})
+    return jsonify(data)
 
 
 # Static file fallback

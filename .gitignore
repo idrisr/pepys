@@ -13,3 +13,4 @@ pdfvisualizer/web/.env
 pdfvisualizer/web/.env.local
 pdfvisualizer/api/.data
 /pdfvisualizer/.ipython/profile_default
+/__pycache__

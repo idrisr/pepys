@@ -40,11 +40,13 @@
           packages = {
             default = pepysPackages.pepys-server;
             pdfvisualizer-api = pepysPackages.pdfvisualizer-api;
+            pdf-split-pages = pepysPackages.pdf-split-pages;
             pepys-people-db = pepysPackages.pepys-people-db;
           };
           apps = {
             default = flake-utils.lib.mkApp { drv = pepysPackages.pepys-server; };
             pdfvisualizer-api = flake-utils.lib.mkApp { drv = pepysPackages.pdfvisualizer-api; };
+            pdf-split-pages = flake-utils.lib.mkApp { drv = pepysPackages.pdf-split-pages; };
           };
           devShells.default = pkgs.mkShell {
             buildInputs = [

@@ -89,6 +89,28 @@
     #entities li {
       margin-bottom: 6px;
     }
+    .entity {
+      background: rgba(106, 160, 255, 0.18);
+      border-bottom: 1px solid rgba(106, 160, 255, 0.6);
+      border-radius: 3px;
+      padding: 0 2px;
+      cursor: pointer;
+    }
+    .entity:hover, .entity:focus {
+      background: rgba(106, 160, 255, 0.3);
+    }
+    .entity-detail {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .entity-detail strong {
+      display: block;
+      color: var(--fg);
+      margin-bottom: 4px;
+    }
     h1 {
       margin: 0 0 12px 0;
       font-size: 22px;
@@ -129,6 +151,7 @@
         <ul id="entities">
           <li class="muted">—</li>
         </ul>
+        <div id="entityDetail" class="entity-detail muted">Click a highlighted name to see who they are.</div>
       </aside>
     </div>
   </main>
@@ -142,11 +165,12 @@
     const summaryMode = document.getElementById('summaryMode');
     const meta = document.getElementById('meta');
     const entitiesList = document.getElementById('entities');
+    const entityDetail = document.getElementById('entityDetail');
 
     let entries = [];
     let idx = 0;
     const summaryCache = new Map(); // key: `${date}|${mode}` -> summary text
-    const entityCache = new Map(); // key: date -> entity list
+    const entityCache = new Map(); // key: date -> { entities, matches }
 
     const fetchEntities = async (date) => {
       if (entityCache.has(date)) return entityCache.get(date);
@@ -156,9 +180,28 @@
         throw new Error(msg);
       }
       const data = await res.json();
-      const entities = Array.isArray(data.entities) ? data.entities : [];
-      entityCache.set(date, entities);
-      return entities;
+      const payload = {
+        entities: Array.isArray(data.entities) ? data.entities : [],
+        matches: Array.isArray(data.matches) ? data.matches : [],
+      };
+      entityCache.set(date, payload);
+      return payload;
+    };
+
+    const showEntityDetail = (name, note) => {
+      entityDetail.innerHTML = '';
+      const title = document.createElement('strong');
+      title.textContent = name || 'Unknown person';
+      const desc = document.createElement('div');
+      desc.textContent = note || 'No details available.';
+      entityDetail.appendChild(title);
+      entityDetail.appendChild(desc);
+      entityDetail.classList.remove('muted');
+    };
+
+    const resetEntityDetail = () => {
+      entityDetail.textContent = 'Click a highlighted name to see who they are.';
+      entityDetail.classList.add('muted');
     };
 
     const renderEntities = async (entry) => {
@@ -170,30 +213,67 @@
       entitiesList.appendChild(loading);
 
       try {
-        const ents = await fetchEntities(date);
-        if (entries[idx]?.date !== date) return;
+        const data = await fetchEntities(date);
+        if (entries[idx]?.date !== date) return null;
         entitiesList.innerHTML = '';
-        if (!ents.length) {
+        if (!data.entities.length) {
           const li = document.createElement('li');
           li.className = 'muted';
           li.textContent = 'No entities detected';
           entitiesList.appendChild(li);
-          return;
+          return data;
         }
-        for (const e of ents) {
+        for (const e of data.entities) {
           const li = document.createElement('li');
-          li.textContent = `${e.name} (${e.count})`;
+          li.textContent = e.name || 'Unknown person';
+          li.dataset.name = e.name || '';
+          li.dataset.note = e.note || '';
           entitiesList.appendChild(li);
         }
+        return data;
       } catch (err) {
-        if (entries[idx]?.date !== date) return;
+        if (entries[idx]?.date !== date) return null;
         entitiesList.innerHTML = '';
         const li = document.createElement('li');
         li.className = 'muted';
         li.textContent = 'Entity lookup failed';
         entitiesList.appendChild(li);
         console.warn('Entities fetch failed:', err);
+        return null;
       }
+    };
+
+    const renderHighlightedBody = (text, matches) => {
+      if (!matches.length) {
+        body.textContent = text;
+        return;
+      }
+      const sorted = [...matches].sort((a, b) => a.start - b.start || a.end - b.end);
+      const fragment = document.createDocumentFragment();
+      let cursor = 0;
+      for (const match of sorted) {
+        const start = Number(match.start);
+        const end = Number(match.end);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+        if (start < cursor || start >= end) continue;
+        if (start >= text.length) continue;
+        const safeEnd = Math.min(end, text.length);
+        if (cursor < start) {
+          fragment.appendChild(document.createTextNode(text.slice(cursor, start)));
+        }
+        const span = document.createElement('span');
+        span.className = 'entity';
+        span.textContent = text.slice(start, safeEnd);
+        span.dataset.personId = match.person_id;
+        if (match.name) span.dataset.name = match.name;
+        if (match.note) span.dataset.note = match.note;
+        fragment.appendChild(span);
+        cursor = safeEnd;
+      }
+      if (cursor < text.length) {
+        fragment.appendChild(document.createTextNode(text.slice(cursor)));
+      }
+      body.replaceChildren(fragment);
     };
 
     const localSummarize = (text, mode) => {
@@ -245,10 +325,17 @@
       picker.value = entry.date;
       prevBtn.disabled = idx === 0;
       nextBtn.disabled = idx === entries.length - 1;
-      renderEntities(entry);
+      resetEntityDetail();
+      const entityPromise = renderEntities(entry);
 
       if (mode === 'full') {
         body.textContent = entry.text;
+        entityPromise?.then((data) => {
+          if (!data) return;
+          if (entries[idx]?.date !== entry.date) return;
+          if (summaryMode.value !== 'full') return;
+          renderHighlightedBody(entry.text, data.matches);
+        });
         return;
       }
 
@@ -273,6 +360,9 @@
         opt.textContent = e.date;
         picker.appendChild(opt);
       }
+      if (entries.length) {
+        idx = Math.floor(Math.random() * entries.length);
+      }
       render();
     };
 
@@ -292,6 +382,20 @@
       if (e.key === 'ArrowRight') { e.preventDefault(); nextBtn.click(); }
       if (e.key === '/' && document.activeElement !== search) { e.preventDefault(); search.focus(); search.select(); }
       if (e.key === 'Escape' && document.activeElement === search) { search.value = ''; }
+    });
+
+    entitiesList.addEventListener('click', (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (!target.dataset.name) return;
+      showEntityDetail(target.dataset.name, target.dataset.note);
+    });
+
+    body.addEventListener('click', (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (!target.classList.contains('entity')) return;
+      showEntityDetail(target.dataset.name || target.textContent, target.dataset.note);
     });
 
     search.addEventListener('keydown', (e) => {

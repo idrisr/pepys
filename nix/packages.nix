@@ -44,6 +44,25 @@ in
     '';
   };
 
+  pdf-split-pages = pkgs.writeShellApplication {
+    name = "pdf-split-pages";
+    runtimeInputs = [ pkgs.poppler ];
+    text = ''
+      set -euo pipefail
+
+      if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+        echo "Usage: pdf-split-pages input.pdf [output-pattern]" >&2
+        echo "Default output pattern: page-%03d.pdf" >&2
+        exit 2
+      fi
+
+      input="$1"
+      output_pattern="${2:-page-%03d.pdf}"
+
+      pdfseparate "$input" "$output_pattern"
+    '';
+  };
+
   pepys-people-db = pkgs.stdenv.mkDerivation {
     pname = "pepys-people-db";
     version = "0.1.0";
