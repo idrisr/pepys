@@ -146,40 +146,53 @@
     let entries = [];
     let idx = 0;
     const summaryCache = new Map(); // key: `${date}|${mode}` -> summary text
+    const entityCache = new Map(); // key: date -> entity list
 
-    const extractEntities = (text) => {
-      const stop = new Set(['The','A','An','And','But','For','In','On','At','Of','To','From','With','His','Her','He','She','They','We','It','My','Our','Their','This','That','These','Those','Sir']);
-      const matches = text.match(/(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/g) || [];
-      const counts = new Map();
-      for (const m of matches) {
-        const trimmed = m.trim();
-        const parts = trimmed.split(/\s+/);
-        if (!parts.length) continue;
-        if (parts.some(p => stop.has(p) || p.length < 3)) continue;
-        if (/^\d/.test(trimmed)) continue;
-        const key = trimmed;
-        counts.set(key, (counts.get(key) || 0) + 1);
+    const fetchEntities = async (date) => {
+      if (entityCache.has(date)) return entityCache.get(date);
+      const res = await fetch(`/entities?date=${encodeURIComponent(date)}&limit=10`);
+      if (!res.ok) {
+        const msg = await res.text().catch(() => res.statusText);
+        throw new Error(msg);
       }
-      return Array.from(counts.entries())
-        .sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]))
-        .slice(0, 10)
-        .map(([name,count]) => ({ name, count }));
+      const data = await res.json();
+      const entities = Array.isArray(data.entities) ? data.entities : [];
+      entityCache.set(date, entities);
+      return entities;
     };
 
-    const renderEntities = (entry) => {
-      const ents = extractEntities(entry.text);
+    const renderEntities = async (entry) => {
+      const date = entry.date;
       entitiesList.innerHTML = '';
-      if (!ents.length) {
+      const loading = document.createElement('li');
+      loading.className = 'muted';
+      loading.textContent = 'Loading…';
+      entitiesList.appendChild(loading);
+
+      try {
+        const ents = await fetchEntities(date);
+        if (entries[idx]?.date !== date) return;
+        entitiesList.innerHTML = '';
+        if (!ents.length) {
+          const li = document.createElement('li');
+          li.className = 'muted';
+          li.textContent = 'No entities detected';
+          entitiesList.appendChild(li);
+          return;
+        }
+        for (const e of ents) {
+          const li = document.createElement('li');
+          li.textContent = `${e.name} (${e.count})`;
+          entitiesList.appendChild(li);
+        }
+      } catch (err) {
+        if (entries[idx]?.date !== date) return;
+        entitiesList.innerHTML = '';
         const li = document.createElement('li');
         li.className = 'muted';
-        li.textContent = 'No entities detected';
+        li.textContent = 'Entity lookup failed';
         entitiesList.appendChild(li);
-        return;
-      }
-      for (const e of ents) {
-        const li = document.createElement('li');
-        li.textContent = `${e.name} (${e.count})`;
-        entitiesList.appendChild(li);
+        console.warn('Entities fetch failed:', err);
       }
     };
 
