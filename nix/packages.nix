@@ -57,7 +57,7 @@ in
       fi
 
       input="$1"
-      output_pattern="${2:-page-%03d.pdf}"
+      output_pattern="''${2:-page-%03d.pdf}"
 
       pdfseparate "$input" "$output_pattern"
     '';
